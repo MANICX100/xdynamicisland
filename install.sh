@@ -35,8 +35,13 @@ chmod +x "${TMP_DIR}/${BIN_NAME}"
 
 if [ -w "$INSTALL_DIR" ]; then
     install -m 755 "${TMP_DIR}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
-else
+elif command -v doas >/dev/null 2>&1; then
+    doas install -m 755 "${TMP_DIR}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+elif command -v sudo >/dev/null 2>&1; then
     sudo install -m 755 "${TMP_DIR}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+else
+    echo "Neither 'doas' nor 'sudo' found; re-run as root to install to ${INSTALL_DIR}." >&2
+    exit 1
 fi
 
 echo "Installed ${BIN_NAME} to ${INSTALL_DIR}/${BIN_NAME}"

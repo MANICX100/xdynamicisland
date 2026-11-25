@@ -27,13 +27,19 @@
 
 ## One-Line Install
 
-Download the prebuilt portable `x86_64` binary directly to `/usr/local/bin/xdynamicisland`:
+Download the prebuilt portable `x86_64` binary directly to `/usr/local/bin/xdynamicisland` using **`doas`** *(default — see [how to install OpenDoas](https://github.com/Duncaen/OpenDoas#installation) or the [Arch Wiki `doas` guide](https://wiki.archlinux.org/title/Doas))*:
+
+```bash
+doas curl -fsSL https://github.com/MANICX100/xdynamicisland/releases/latest/download/xdynamicisland-linux-x86_64 -o /usr/local/bin/xdynamicisland && doas chmod +x /usr/local/bin/xdynamicisland
+```
+
+**Alternative using `sudo`:**
 
 ```bash
 sudo curl -fsSL https://github.com/MANICX100/xdynamicisland/releases/latest/download/xdynamicisland-linux-x86_64 -o /usr/local/bin/xdynamicisland && sudo chmod +x /usr/local/bin/xdynamicisland
 ```
 
-Or use the checksum-verifying installer script:
+Or use the checksum-verifying installer script *(automatically uses `doas` if available, falling back to `sudo`)*:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MANICX100/xdynamicisland/main/install.sh | sh
@@ -157,19 +163,19 @@ Notification history is persisted in `~/.local/share/xdynamicisland/notification
 
 ### Runtime & Build Dependencies
 
-Only standard Linux X11 desktop libraries are required:
+Only standard Linux X11 desktop libraries are required *(replace `doas` with `sudo` if preferred)*:
 
 ```bash
 # Debian / Ubuntu
-sudo apt install build-essential pkg-config libx11-dev libxext-dev libxrandr-dev \
+doas apt install build-essential pkg-config libx11-dev libxext-dev libxrandr-dev \
                  libcairo2-dev libpango1.0-dev libdbus-1-dev
 
 # Fedora
-sudo dnf install gcc make pkg-config libX11-devel libXext-devel libXrandr-devel \
+doas dnf install gcc make pkg-config libX11-devel libXext-devel libXrandr-devel \
                  cairo-devel pango-devel dbus-devel
 
 # Arch Linux
-sudo pacman -S base-devel pkgconf libx11 libxext libxrandr cairo pango dbus
+doas pacman -S base-devel pkgconf libx11 libxext libxrandr cairo pango dbus
 ```
 
 Optional runtime tools automatically detected if present:
@@ -188,7 +194,7 @@ cd xdynamicisland
 make release       # Build -O3 -flto stripped binary (~176 KB)
 make test          # Run unit test suite
 make sanitize      # Run tests with ASan + UBSan (requires clang or libasan)
-sudo make install  # Install to /usr/local/bin/xdynamicisland
+doas make install  # Install to /usr/local/bin/xdynamicisland (or: sudo make install)
 ```
 
 ---
