@@ -77,5 +77,6 @@ jobs:
             --inline-suppr \
             --suppress=missingIncludeSystem \
             --suppress=unmatchedSuppression \
+            --suppress='*:third_party/*' \
             -I include \
             src/
