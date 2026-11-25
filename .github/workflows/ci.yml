@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ matrix.cc }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [ gcc, clang ]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang pkg-config \
+            libx11-dev libxext-dev libxrandr-dev \
+            libcairo2-dev libpango1.0-dev libdbus-1-dev
+
+      - name: Build release binary (${{ matrix.cc }})
+        run: make CC=${{ matrix.cc }} release
+
+      - name: Run unit tests (${{ matrix.cc }})
+        run: make CC=${{ matrix.cc }} test
+
+      - name: Check binary size budget (< 350 KB)
+        run: make CC=${{ matrix.cc }} size-check
+
+      - name: Verify CLI help and version
+        run: |
+          ./xdynamicisland --version
+          ./xdynamicisland --help
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config \
+            libx11-dev libxext-dev libxrandr-dev \
+            libcairo2-dev libpango1.0-dev libdbus-1-dev
+
+      - name: Run AddressSanitizer & UndefinedBehaviorSanitizer tests
+        run: make CC=clang sanitize
+
+  static-analysis:
+    name: Static Analysis (cppcheck)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck on src/ and include/
+        run: |
+          cppcheck --enable=warning,performance,portability \
+            --error-exitcode=1 \
+            --inline-suppr \
+            --suppress=missingIncludeSystem \
+            --suppress=unmatchedSuppression \
+            -I include \
+            src/

@@ -1,0 +1,19 @@
+# Build outputs
+build/
+xdynamicisland
+test_runner
+*.o
+*.d
+*.a
+*.so
+
+# System/agent skills directory
+skills/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+compile_commands.json
