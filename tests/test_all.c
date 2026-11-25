@@ -6,7 +6,9 @@
 
 #include "audio_viz.h"
 #include "config.h"
+#include "instance.h"
 #include "media.h"
+#include "mpv.h"
 #include "notifications.h"
 #include "obstacles.h"
 #include "spring.h"
@@ -190,6 +192,61 @@ static void test_notifications_store_and_persistence(void) {
     ASSERT_TRUE(strcmp(tbuf, "2h") == 0);
 }
 
+static void test_kdeconnect_notification_actions_and_merge(void) {
+    xdi_notif_store_t st;
+    xdi_notif_init_store_only(&st, 16, NULL);
+
+    /* Simulate Freedesktop Notify emitted by KDE Connect with Android actions */
+    xdi_notif_action_t acts[2];
+    memset(acts, 0, sizeof(acts));
+    snprintf(acts[0].key, sizeof(acts[0].key), "1");
+    snprintf(acts[0].label, sizeof(acts[0].label), "Mark as read");
+    acts[0].kind = XDI_ACT_NONE;
+    snprintf(acts[1].key, sizeof(acts[1].key), "inline-reply");
+    snprintf(acts[1].label, sizeof(acts[1].label), "Reply");
+    acts[1].kind = XDI_ACT_NONE;
+
+    xdi_notif_push_with_actions(&st, 55, "KDE Connect", "", "Messages: Bob",
+                                "Are we still on for tonight?", 1, 1700001000,
+                                true, acts, 2);
+    ASSERT_EQ_INT(st.count, 1);
+    ASSERT_TRUE(st.items[0].is_kdeconnect);
+    ASSERT_EQ_INT(st.items[0].action_count, 2);
+
+    /* Now KDE Connect D-Bus notificationPosted arrives for the same notification */
+    xdi_notif_merge_kdeconnect(&st, "dev1234", "pub42", "0|com.sms|99|null|100",
+                               "Messages", "Bob", "Are we still on for tonight?",
+                               "reply-uuid-7", true, false, 1700001001);
+
+    /* Must correlate/merge rather than creating a duplicate row */
+    ASSERT_EQ_INT(st.count, 1);
+    ASSERT_TRUE(st.items[0].is_kdeconnect);
+    ASSERT_TRUE(st.items[0].kde_dismissable);
+    ASSERT_TRUE(strcmp(st.items[0].kde_dev_id, "dev1234") == 0);
+    ASSERT_TRUE(strcmp(st.items[0].kde_public_id, "pub42") == 0);
+    ASSERT_TRUE(strcmp(st.items[0].kde_internal_id, "0|com.sms|99|null|100") == 0);
+    ASSERT_TRUE(strcmp(st.items[0].kde_reply_id, "reply-uuid-7") == 0);
+
+    /* Actions should now be bound: Mark as read (KDE_ACTION), Reply (KDE_REPLY), Dismiss (KDE_DISMISS) */
+    ASSERT_EQ_INT(st.items[0].action_count, 3);
+    ASSERT_EQ_INT(st.items[0].actions[0].kind, XDI_ACT_KDE_ACTION);
+    ASSERT_TRUE(strcmp(st.items[0].actions[0].label, "Mark as read") == 0);
+    ASSERT_EQ_INT(st.items[0].actions[1].kind, XDI_ACT_KDE_REPLY);
+    ASSERT_TRUE(strcmp(st.items[0].actions[1].label, "Reply") == 0);
+    ASSERT_EQ_INT(st.items[0].actions[2].kind, XDI_ACT_KDE_DISMISS);
+    ASSERT_TRUE(strcmp(st.items[0].actions[2].label, "Dismiss") == 0);
+
+    /* Also synced onto live toast `latest` */
+    ASSERT_EQ_INT(st.latest.action_count, 3);
+    ASSERT_EQ_INT(st.latest.actions[0].kind, XDI_ACT_KDE_ACTION);
+
+    /* Removing notification on phone clears stale action buttons */
+    xdi_notif_kde_removed(&st, "pub42");
+    ASSERT_EQ_INT(st.items[0].action_count, 0);
+    ASSERT_TRUE(!st.items[0].kde_dismissable);
+    ASSERT_EQ_INT(st.latest.action_count, 0);
+}
+
 /* ---------- Obstacle / dmenu Detection Tests ---------- */
 
 static void test_dmenu_top_and_bottom_repositioning(void) {
@@ -299,6 +356,104 @@ static void test_player_prioritization(void) {
     ASSERT_EQ_INT(xdi_select_best_player(ps, 3, 0, true), 0);
 }
 
+/* ---------- Single-Instance Guard Tests ---------- */
+
+static void test_instance_pid_parsing_and_lock(void) {
+    pid_t pid = 0;
+    ASSERT_TRUE(xdi_instance_parse_pid("12345\n", &pid));
+    ASSERT_EQ_INT((int)pid, 12345);
+    ASSERT_TRUE(xdi_instance_parse_pid("  9876 ", &pid));
+    ASSERT_EQ_INT((int)pid, 9876);
+    ASSERT_TRUE(!xdi_instance_parse_pid("0", &pid));
+    ASSERT_TRUE(!xdi_instance_parse_pid("-5", &pid));
+    ASSERT_TRUE(!xdi_instance_parse_pid("notapid", &pid));
+    ASSERT_TRUE(!xdi_instance_parse_pid("", &pid));
+
+    ASSERT_TRUE(xdi_instance_comm_matches("xdynamicisland"));
+    ASSERT_TRUE(xdi_instance_comm_matches("xdynamicisland\n"));
+    ASSERT_TRUE(xdi_instance_comm_matches("xdynamicisland-linux"));
+    ASSERT_TRUE(!xdi_instance_comm_matches("firefox"));
+    ASSERT_TRUE(!xdi_instance_comm_matches("dynamicisland"));
+
+    /* Acquire and release an isolated temporary PID lock file */
+    char tmp_pid[128];
+    snprintf(tmp_pid, sizeof(tmp_pid), "/tmp/xdi_test_inst_%d.pid", (int)getpid());
+    unlink(tmp_pid);
+
+    xdi_instance_t inst;
+    ASSERT_TRUE(xdi_instance_acquire(&inst, tmp_pid));
+    ASSERT_TRUE(inst.lock_fd >= 0);
+
+    /* Verify our PID was written */
+    FILE *f = fopen(tmp_pid, "r");
+    ASSERT_TRUE(f != NULL);
+    char buf[32] = {0};
+    ASSERT_TRUE(fgets(buf, sizeof(buf), f) != NULL);
+    fclose(f);
+    pid_t stored = 0;
+    ASSERT_TRUE(xdi_instance_parse_pid(buf, &stored));
+    ASSERT_EQ_INT((int)stored, (int)getpid());
+
+    xdi_instance_release(&inst);
+    ASSERT_EQ_INT(inst.lock_fd, -1);
+    ASSERT_TRUE(access(tmp_pid, F_OK) != 0);
+}
+
+/* ---------- Native mpv Parsing Tests ---------- */
+
+static void test_mpv_title_cmdline_and_ipc_parser(void) {
+    char clean[128];
+    xdi_mpv_clean_window_title("Big Buck Bunny (1080p).mkv - mpv", clean, sizeof(clean));
+    ASSERT_TRUE(strcmp(clean, "Big Buck Bunny (1080p).mkv") == 0);
+
+    xdi_mpv_clean_window_title("No file - mpv", clean, sizeof(clean));
+    ASSERT_TRUE(strcmp(clean, "No file") == 0);
+
+    xdi_mpv_clean_window_title("Daft Punk - Aerodynamic", clean, sizeof(clean));
+    ASSERT_TRUE(strcmp(clean, "Daft Punk - Aerodynamic") == 0);
+
+    /* Extract --input-ipc-server from NUL-delimited /proc/<pid>/cmdline */
+    const char cmd1[] = "mpv\0--input-ipc-server=/tmp/my_mpv.sock\0video.mp4\0";
+    char ipc[128];
+    ASSERT_TRUE(xdi_mpv_extract_ipc_arg(cmd1, sizeof(cmd1), ipc, sizeof(ipc)));
+    ASSERT_TRUE(strcmp(ipc, "/tmp/my_mpv.sock") == 0);
+
+    const char cmd2[] = "mpv\0--input-ipc-server\0/run/user/1000/mpv.sock\0track.flac\0";
+    ASSERT_TRUE(xdi_mpv_extract_ipc_arg(cmd2, sizeof(cmd2), ipc, sizeof(ipc)));
+    ASSERT_TRUE(strcmp(ipc, "/run/user/1000/mpv.sock") == 0);
+
+    const char cmd3[] = "mpv\0--vo=gpu\0movie.mkv\0";
+    ASSERT_TRUE(!xdi_mpv_extract_ipc_arg(cmd3, sizeof(cmd3), ipc, sizeof(ipc)));
+
+    /* Parse mpv JSON IPC property-change events */
+    xdi_player_t p;
+    memset(&p, 0, sizeof(p));
+    ASSERT_TRUE(xdi_mpv_parse_ipc_line(
+        &p, "{\"event\":\"property-change\",\"id\":1,\"name\":\"pause\",\"data\":false}", 1000));
+    ASSERT_EQ_INT(p.status, XDI_PLAYBACK_PLAYING);
+
+    ASSERT_TRUE(xdi_mpv_parse_ipc_line(
+        &p, "{\"event\":\"property-change\",\"id\":1,\"name\":\"pause\",\"data\":true}", 1050));
+    ASSERT_EQ_INT(p.status, XDI_PLAYBACK_PAUSED);
+
+    ASSERT_TRUE(xdi_mpv_parse_ipc_line(
+        &p, "{\"event\":\"property-change\",\"id\":2,\"name\":\"media-title\",\"data\":\"Track \\\"01\\\"\"}", 1100));
+    ASSERT_TRUE(strcmp(p.title, "Track \"01\"") == 0);
+
+    ASSERT_TRUE(xdi_mpv_parse_ipc_line(
+        &p, "{\"event\":\"property-change\",\"id\":4,\"name\":\"metadata/by-key/artist\",\"data\":\"Boards of Canada\"}", 1150));
+    ASSERT_TRUE(strcmp(p.artist, "Boards of Canada") == 0);
+
+    ASSERT_TRUE(xdi_mpv_parse_ipc_line(
+        &p, "{\"event\":\"property-change\",\"id\":6,\"name\":\"duration\",\"data\":245.5}", 1200));
+    ASSERT_TRUE(p.length_us == 245500000LL);
+
+    ASSERT_TRUE(xdi_mpv_parse_ipc_line(
+        &p, "{\"event\":\"property-change\",\"id\":7,\"name\":\"time-pos\",\"data\":42.25}", 1250));
+    ASSERT_TRUE(p.position_us == 42250000LL);
+    ASSERT_TRUE(p.pos_timestamp_ms == 1250);
+}
+
 /* ---------- Audio FFT & Waveform Tests ---------- */
 
 static void test_audio_fft_and_waveform(void) {
@@ -347,9 +502,12 @@ int main(void) {
     RUN_TEST(test_config_roundtrip);
     RUN_TEST(test_config_hex_and_gradient);
     RUN_TEST(test_notifications_store_and_persistence);
+    RUN_TEST(test_kdeconnect_notification_actions_and_merge);
     RUN_TEST(test_dmenu_top_and_bottom_repositioning);
     RUN_TEST(test_wpctl_volume_parser);
     RUN_TEST(test_player_prioritization);
+    RUN_TEST(test_instance_pid_parsing_and_lock);
+    RUN_TEST(test_mpv_title_cmdline_and_ipc_parser);
     RUN_TEST(test_audio_fft_and_waveform);
 
     printf("\nResults: %d passed, %d failed\n", g_passed, g_failed);

@@ -38,7 +38,9 @@ typedef enum {
     XDI_HIT_PLAYER_NEXT,
     XDI_HIT_CLEAR_NOTIFS,
     XDI_HIT_CLOSE_NOTIFS,
-    XDI_HIT_NOTIF_DISMISS_BASE = 100 /* 100 + index */
+    XDI_HIT_TOAST_ACTION_BASE = 60,   /* 60 + action_idx */
+    XDI_HIT_NOTIF_DISMISS_BASE = 100, /* 100 + row_idx */
+    XDI_HIT_NOTIF_ACTION_BASE = 200   /* 200 + row_idx * XDI_NOTIF_MAX_ACTIONS + action_idx */
 } xdi_hit_id_t;
 
 typedef struct {
@@ -46,7 +48,7 @@ typedef struct {
     int id;
 } xdi_hit_rect_t;
 
-#define XDI_MAX_HIT_RECTS 40
+#define XDI_MAX_HIT_RECTS 96
 
 typedef struct {
     Display *dpy;
@@ -68,6 +70,9 @@ typedef struct {
     Atom atom_state_skip_pager;
     Atom atom_motif_hints;
     Atom atom_net_active;
+    Atom atom_net_clients;
+    Atom atom_net_stacking;
+    Atom atom_net_workarea;
 
     /* Monitor geometry */
     xdi_rect_t monitor;
@@ -77,6 +82,9 @@ typedef struct {
     int surf_h;
     int win_x;
     int win_y;
+    int shape_w;
+    int shape_h;
+    int shape_r;
     cairo_surface_t *xlib_surf;
     cairo_surface_t *back_surf;
 
@@ -97,6 +105,7 @@ typedef struct {
     int64_t hover_leave_ms;
     int64_t toast_until_ms;
     int64_t last_frame_ms;
+    int64_t last_render_ms;
     int64_t last_obstacle_check_ms;
     bool obstacles_dirty;
     bool needs_redraw;
@@ -141,7 +150,7 @@ void xdi_ui_show_volume_toast(xdi_ui_t *ui, int64_t now_ms);
 void xdi_ui_show_notif_toast(xdi_ui_t *ui, int64_t now_ms);
 
 /* Step state machine, springs, obstacle checks, and redraw if needed.
- * Returns recommended poll timeout in milliseconds (e.g. 16ms animating, 500ms idle). */
+ * Returns recommended poll timeout in milliseconds (e.g. 16ms animating, 450ms idle). */
 int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win);
 
 #endif /* XDI_UI_H */

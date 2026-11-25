@@ -21,11 +21,13 @@ ALL_CFLAGS := $(BASE_CFLAGS) $(CFLAGS) $(PKG_CFLAGS)
 ALL_LIBS   := $(PKG_LIBS) -lm -lpthread -ldl
 
 SRCS := src/main.c \
+        src/instance.c \
         src/spring.c \
         src/config.c \
         src/audio_viz.c \
         src/obstacles.c \
         src/notifications.c \
+        src/mpv.c \
         src/media.c \
         src/art.c \
         src/ui.c \
@@ -34,11 +36,13 @@ SRCS := src/main.c \
 OBJS := $(patsubst src/%.c,build/%.o,$(SRCS))
 
 TEST_SRCS := tests/test_all.c \
+             src/instance.c \
              src/spring.c \
              src/config.c \
              src/audio_viz.c \
              src/obstacles.c \
              src/notifications.c \
+             src/mpv.c \
              src/media.c
 
 .PHONY: all release test sanitize install uninstall clean size-check
@@ -48,7 +52,9 @@ all: $(TARGET)
 build:
 	@mkdir -p build
 
-build/%.o: src/%.c | build
+HEADERS := $(wildcard include/*.h)
+
+build/%.o: src/%.c $(HEADERS) | build
 	$(CC) $(ALL_CFLAGS) -c $< -o $@
 
 $(TARGET): $(OBJS)

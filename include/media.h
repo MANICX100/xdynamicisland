@@ -7,6 +7,8 @@
 
 #define XDI_MAX_PLAYERS 12
 
+struct xdi_mpv_s;
+
 typedef enum {
     XDI_PLAYBACK_STOPPED = 0,
     XDI_PLAYBACK_PAUSED,
@@ -25,6 +27,7 @@ typedef struct {
     int64_t position_us;
     int64_t pos_timestamp_ms; /* Monotonic ms when position_us was sampled */
     bool is_kdeconnect;
+    bool is_mpv_native;
     bool can_seek;
     bool can_control;
 } xdi_player_t;
@@ -37,6 +40,7 @@ typedef struct {
 
 typedef struct {
     DBusConnection *conn;
+    struct xdi_mpv_s *mpv; /* Optional native mpv backend (IPC + stock X11) */
     xdi_player_t players[XDI_MAX_PLAYERS];
     int player_count;
     int active_index;
@@ -53,13 +57,16 @@ typedef struct {
 /* Initialize MPRIS2 D-Bus connection + initial wpctl volume query. */
 bool xdi_media_init(xdi_media_t *m);
 
+/* Attach optional native mpv backend (handles mpv without mpv-mpris). */
+void xdi_media_attach_mpv(xdi_media_t *m, struct xdi_mpv_s *mpv);
+
 /* Shutdown and release resources. */
 void xdi_media_destroy(xdi_media_t *m);
 
 /* Get file descriptor for poll() integration (-1 if unavailable). */
 int xdi_media_get_fd(xdi_media_t *m);
 
-/* Dispatch pending D-Bus messages and periodic volume/position refresh. */
+/* Dispatch pending D-Bus messages, native mpv updates, and periodic volume/position refresh. */
 void xdi_media_poll(xdi_media_t *m, int64_t now_ms);
 
 /* Return currently active player (or NULL if none). */
@@ -68,13 +75,13 @@ const xdi_player_t *xdi_media_active(const xdi_media_t *m);
 /* Compute estimated live playback position in microseconds. */
 int64_t xdi_media_current_position_us(const xdi_player_t *p, int64_t now_ms);
 
-/* Media controls on the active MPRIS player (works for Spotify, browsers, KDE Connect, mpv, etc.). */
+/* Media controls on the active player (MPRIS2, KDE Connect, or native mpv). */
 void xdi_media_play_pause(xdi_media_t *m);
 void xdi_media_next(xdi_media_t *m);
 void xdi_media_prev(xdi_media_t *m);
 void xdi_media_seek_fraction(xdi_media_t *m, double frac);
 
-/* Cycle between detected MPRIS players (e.g. Chromium <-> KDE Connect). */
+/* Cycle between detected players (e.g. Chromium <-> mpv <-> KDE Connect). */
 void xdi_media_cycle_player(xdi_media_t *m, int delta);
 
 /* Volume control via wpctl (@DEFAULT_AUDIO_SINK@) with PipeWire/WirePlumber. */

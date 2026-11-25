@@ -14,11 +14,11 @@
 
 [![Language: C11](https://img.shields.io/badge/Language-C11-blue?style=flat-square&logo=c)](Makefile)
 [![Platform: Linux X11](https://img.shields.io/badge/Platform-Linux%20X11-black?style=flat-square&logo=linux)](README.md)
-[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-9%2F9%20Passing-brightgreen?style=flat-square)](tests/test_all.c)
+[![Unit Tests](https://img.shields.io/badge/Unit%20Tests-12%2F12%20Passing-brightgreen?style=flat-square)](tests/test_all.c)
 [![Sanitizers](https://img.shields.io/badge/ASan%20%2B%20UBSan-Verified-brightgreen?style=flat-square)](.github/workflows/ci.yml)
 [![Static Analysis](https://img.shields.io/badge/Static%20Analysis-cppcheck-brightgreen?style=flat-square)](.github/workflows/ci.yml)
-[![Binary Size](https://img.shields.io/badge/Stripped%20Binary-~176%20KB-blueviolet?style=flat-square)](#performance--footprint)
-[![Private Memory](https://img.shields.io/badge/Private%20RAM-~3.6%20MB-informational?style=flat-square)](#performance--footprint)
+[![Binary Size](https://img.shields.io/badge/Stripped%20Binary-~208%20KB-blueviolet?style=flat-square)](#performance--footprint)
+[![Private Memory](https://img.shields.io/badge/Private%20RAM-~4.0%20MB-informational?style=flat-square)](#performance--footprint)
 [![DE Independent](https://img.shields.io/badge/DE%20Dependencies-None-success?style=flat-square)](#features)
 
 </div>
@@ -45,7 +45,7 @@ Or use the checksum-verifying installer script *(automatically uses `doas` if av
 curl -fsSL https://raw.githubusercontent.com/MANICX100/xdynamicisland/main/install.sh | sh
 ```
 
-Then launch it anywhere (or add `xdynamicisland &` to your `~/.xinitrc`, IceWM startup, i3/bspwm/dwm/openbox autostart):
+Then launch it anywhere (or add `xdynamicisland &` to your `~/.xinitrc`, IceWM startup, i3/bspwm/dwm/openbox autostart). Launching a new instance automatically kills and cleanly replaces any previously running instance:
 
 ```bash
 xdynamicisland &
@@ -56,7 +56,8 @@ xdynamicisland &
 ## Features
 
 - **100% Desktop-Environment Independent** — Works on **IceWM, dwm, i3, bspwm, Openbox, AwesomeWM, Fluxbox, XFCE, MATE, KDE/X11, GNOME/X11**, or bare X.Org.
-- **Compositor & Non-Compositor Support** — Automatically uses 32-bit ARGB transparency + soft multi-layered drop shadows when a compositor (`picom`, `xcompmgr`, etc.) is running, and seamlessly switches to crisp `XShape` rounded-pill masking when **no compositor** is active (zero ugly black square corners!).
+- **Automatic Single-Instance Replacement** — Launching `xdynamicisland` while another instance is already running cleanly terminates the existing process (`SIGTERM` with graceful wait, `SIGKILL` fallback) via an exclusive PID lock file (`$XDG_RUNTIME_DIR/xdynamicisland.pid`) and replaces it seamlessly (CLI queries like `--version` and `--help` never interrupt a running instance).
+- **Compositor & Non-Compositor Support** — Automatically uses 32-bit ARGB transparency + soft multi-layered drop shadows when a compositor (`picom`, `xcompmgr`, etc.) is running, and seamlessly switches to cached `XShape` rounded-pill masking when **no compositor** is active (zero ugly black square corners!).
 - **Fluid 60fps iOS Spring Physics** — Critically tuned damped harmonic springs ($\zeta = 0.78$, response $0.40\,\text{s}$) give authentic Apple Dynamic Island expansion, collapse, toast morphing, and position gliding.
 - **Sexy Live Playback Waveforms (6 Styles)** — Real-time 256-point Radix-2 FFT audio spectrum captured live from PipeWire/PulseAudio (`@DEFAULT_MONITOR@` via optional `dlopen`), with automatic organic multi-harmonic animation for remote playback (such as phone audio via **KDE Connect**):
   - `wave` — Dual-layered glowing harmonic waveform with soft bloom & album-art-blended gradient *(default)*
@@ -65,14 +66,16 @@ xdynamicisland &
   - `spectrum` — High-resolution multi-band FFT analyzer
   - `segments` — Retro illuminated LED meter
   - `solid` — Smooth cosine-interpolated filled wave
-- **Complete Media & Audio Control (`MPRIS2` + `KDE Connect` + `wpctl`)**:
+- **Complete Media & Audio Control (`MPRIS2` + Native `mpv` + `KDE Connect` + `wpctl`)**:
   - Controls **Spotify, Chromium, Firefox, Vivaldi, mpv, VLC**, and **paired phones via KDE Connect** (automatically shows your paired phone's name and cover art!).
-  - Click the source badge to switch between multiple active players (e.g., PC browser ↔ KDE Connect phone).
+  - **Built-in Native `mpv` Support** — Works out-of-the-box with zero configuration on stock `mpv` windows (reads media title, tracks play/pause state, controls play/pause/next/prev), automatically upgrades to zero-poll **mpv JSON IPC** (`--input-ipc-server`, or add `input-ipc-server=/tmp/mpvsocket` to `~/.config/mpv/mpv.conf` for exact artist, album, duration, and scrubbing!), and cleanly yields if `mpv-mpris` is installed.
+  - Click the source badge to switch between multiple active players (e.g., `mpv` ↔ browser ↔ KDE Connect phone).
   - Interactive **scrub/progress bar**, Play/Pause, Next, Previous, and async cached album art (PNG & JPEG) with optional vinyl spin and dominant-color ambient glow.
   - Native **WirePlumber / PipeWire (`wpctl`)** volume & mute control — scroll anywhere on the island or click the inline volume slider/mute button, with automatic iOS-style Volume OSD toasts!
-- **Notification History via `notification-daemon`**:
+- **Notification History & Interactive KDE Connect Actions**:
   - Non-invasively listens to `org.freedesktop.Notifications.Notify` over D-Bus (`BecomeMonitor`, compatible with both `dbus-broker` and `dbus-daemon`) — works right alongside `notification-daemon`, `dunst`, or `xfce4-notifyd` without replacing or conflicting with your existing daemon!
-  - Live toast pop-ups on new notifications + full scrollable **Notification History drawer** with relative timestamps, unread badge, individual dismiss, Clear All, and persistent history across restarts.
+  - **KDE Connect Interactive Notification Actions** — Subscribes directly to `org.kde.kdeconnect.device.notifications` (reusing the existing D-Bus connection with zero extra FDs) to surface clickable **Reply**, **Dismiss**, and Android notification action pills (e.g., *Mark as read*, *Archive*, *Like*) right inside both live notification toasts (hovering pauses auto-dismiss!) and the scrollable **Notification History drawer**. Dismissing a KDE Connect notification also clears it on your phone!
+  - Relative timestamps, unread badge, individual dismiss, Clear All, and persistent history across restarts.
 - **Smart `Always On Top` + `dmenu` / Overlay Awareness**:
   - Configurable **Always On Top** setting so the island floats above all regular windows (or yields to normal windows when disabled).
   - Event-driven X11 `SubstructureNotify` obstacle detector watches for **`dmenu`, `rofi`, `bemenu`, `gmrun`, override-redirect launchers, and EWMH panels** — the instant `dmenu` is summoned (single-line, vertical `-l`, or bottom `-b`), `xdynamicisland` smoothly spring-glides right below (or above) `dmenu` so it is **never obscured** and **never obscures `dmenu`**!
@@ -86,11 +89,11 @@ Designed strictly in priority order: **1. Performance → 2. Memory Footprint �
 
 | Metric | Measured Result | How It's Achieved |
 | :--- | :--- | :--- |
-| **Idle CPU Usage** | **`~0.0%`** | Pure event-driven `poll()` multiplexing X11 + D-Bus fds; audio thread stops automatically when paused/remote |
-| **Active Animation** | **Locked 60 FPS** | Zero-GC C11 (`-O3 -flto`), double-buffered Cairo rendering, sub-stepped spring integrator |
-| **Private RAM (`Private_Dirty`)** | **`~3.6 MB`** | No GTK, no Qt, no Electron, no Python/JS runtime; album art downscaled to ≤160×160 |
-| **Proportional Set Size (`PSS`)** | **`~4.5 MB`** | Direct `libX11` + `libcairo` + `libpangocairo` + `libdbus-1` |
-| **Stripped Binary Size** | **`~176 KB`** | `-flto -ffunction-sections -fdata-sections -Wl,--gc-sections`, embedded `STBI_ONLY_JPEG/PNG`, optional `dlopen` for PulseAudio |
+| **Idle CPU Usage** | **`~0.0%`** | Pure event-driven `poll()` multiplexing X11 + D-Bus + mpv IPC fds; audio thread stops automatically when paused/remote |
+| **Active Animation** | **60 FPS Morphs** | Zero-GC C11 (`-O3 -flto`), double-buffered Cairo rendering, cached XShape masks, adaptive frame pacing |
+| **Private RAM (`Private_Dirty`)** | **`~4.0 MB`** | No GTK, no Qt, no Electron, no Python/JS runtime; shared D-Bus connection for MPRIS + KDE Connect; art downscaled ≤160×160 |
+| **Proportional Set Size (`PSS`)** | **`~5.2 MB`** | Direct `libX11` + `libcairo` + `libpangocairo` + `libdbus-1` |
+| **Stripped Binary Size** | **`~208 KB`** | `-flto -ffunction-sections -fdata-sections -Wl,--gc-sections`, embedded `STBI_ONLY_JPEG/PNG`, optional `dlopen` for PulseAudio |
 
 ---
 
@@ -98,11 +101,11 @@ Designed strictly in priority order: **1. Performance → 2. Memory Footprint �
 
 | Interaction | Action |
 | :--- | :--- |
-| **Hover over Island** | Smoothly expands into the Media Control Card (or Quick Actions when idle) |
+| **Hover over Island** | Smoothly expands into the Media Control Card (or Quick Actions when idle; pauses active notification toast auto-dismiss) |
 | **Mouse Wheel Up / Down** | Adjusts system volume via `wpctl` (or scrolls the Notification History drawer when open) |
-| **Left-Click Controls** | Play/Pause, Previous, Next, Seek Bar, Volume Bar, Mute Toggle |
-| **Click Source Label (`1/2`)** | Cycles between active MPRIS2 players (e.g., Chromium ↔ KDE Connect) |
-| **Click Bell Icon (`🔔`)** | Opens the scrollable `notification-daemon` Notification History drawer |
+| **Left-Click Controls** | Play/Pause, Previous, Next, Seek Bar, Volume Bar, Mute Toggle, KDE Connect Action Pills (`Reply`, `Dismiss`, Android actions) |
+| **Click Source Label (`1/2`)** | Cycles between active media players (e.g., `mpv` ↔ Chromium ↔ KDE Connect) |
+| **Click Bell Icon (`🔔`)** | Opens the scrollable `notification-daemon` & KDE Connect Notification History drawer |
 | **Click Gear Icon (`⚙`) / Right-Click** | Opens the live native Settings window (right-click also dismisses active toasts) |
 
 ---
@@ -157,6 +160,11 @@ font_family = Sans
 
 Notification history is persisted in `~/.local/share/xdynamicisland/notifications.tsv` and remote album artwork is cached in `~/.cache/xdynamicisland/art/`.
 
+> **Tip for `mpv` power users:** Stock `mpv` works automatically with zero setup. To unlock exact track artist/album tags, duration, and interactive scrubbing in `mpv`, add one line to `~/.config/mpv/mpv.conf`:
+> ```ini
+> input-ipc-server=/tmp/mpvsocket
+> ```
+
 ---
 
 ## Building from Source
@@ -181,7 +189,8 @@ doas pacman -S base-devel pkgconf libx11 libxext libxrandr cairo pango dbus
 Optional runtime tools automatically detected if present:
 - `wpctl` (WirePlumber / PipeWire) for volume & mute controls
 - `libpulse-simple.so.0` (PipeWire-Pulse / PulseAudio) for live FFT audio waveform capture
-- `kdeconnectd` for remote phone media control & notifications
+- `kdeconnectd` for remote phone media control, phone notifications & interactive notification actions
+- `mpv` (stock X11, `--input-ipc-server`, or `mpv-mpris`) for native media info & playback controls
 - `notification-daemon` (or any `org.freedesktop.Notifications` daemon) for notification history
 - `curl` for downloading remote HTTPS album artwork
 
@@ -191,8 +200,8 @@ Optional runtime tools automatically detected if present:
 git clone https://github.com/MANICX100/xdynamicisland.git
 cd xdynamicisland
 
-make release       # Build -O3 -flto stripped binary (~176 KB)
-make test          # Run unit test suite
+make release       # Build -O3 -flto stripped binary (~208 KB)
+make test          # Run 12-test unit test suite
 make sanitize      # Run tests with ASan + UBSan (requires clang or libasan)
 doas make install  # Install to /usr/local/bin/xdynamicisland (or: sudo make install)
 ```
@@ -203,13 +212,15 @@ doas make install  # Install to /usr/local/bin/xdynamicisland (or: sudo make ins
 
 ```text
 src/
-├── main.c           # Single poll() event loop (X11 fd + MPRIS D-Bus fd + Notification D-Bus fd)
-├── ui.c             # Dynamic Island X11 window (ARGB + XShape fallback), Cairo/Pango renderer, waveforms
+├── main.c           # Single poll() event loop (X11 + MPRIS/KDEConnect D-Bus + Notif Monitor + mpv IPC)
+├── instance.c       # Single-instance PID lock & automatic replacement of existing instances
+├── ui.c             # Dynamic Island X11 window (ARGB + cached XShape), Cairo/Pango renderer, action pills
 ├── settings_ui.c    # Native lightweight X11 + Cairo Settings window
 ├── spring.c         # Sub-stepped damped harmonic spring physics engine
-├── media.c          # MPRIS2 D-Bus client (Spotify/browsers/KDE Connect) + wpctl volume backend
+├── mpv.c            # Native mpv backend (event-driven JSON IPC + zero-config X11 fallback)
+├── media.c          # MPRIS2 D-Bus client (Spotify/browsers/KDE Connect) + native mpv + wpctl volume
 ├── audio_viz.c      # 256-pt Radix-2 FFT + optional dlopen(libpulse-simple) + harmonic fallback
-├── notifications.c  # Non-invasive D-Bus BecomeMonitor listener for notification-daemon + history store
+├── notifications.c  # Non-invasive D-Bus BecomeMonitor listener + KDE Connect actions + history store
 ├── obstacles.c      # SubstructureNotify + EWMH obstacle solver (dmenu, rofi, top/bottom bars)
 ├── art.c            # Background threaded album art fetcher/decoder (embedded stb_image) + color extractor
 └── config.c         # INI configuration parser/writer + glossy accent gradient math

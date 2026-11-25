@@ -57,6 +57,15 @@ static int find_hit(const xdi_ui_t *ui, double x, double y) {
     return XDI_HIT_NONE;
 }
 
+static int count_clickable_actions(const xdi_notification_t *n) {
+    if (!n) return 0;
+    int c = 0;
+    for (int i = 0; i < n->action_count; i++) {
+        if (n->actions[i].kind != XDI_ACT_NONE && n->actions[i].label[0]) c++;
+    }
+    return c;
+}
+
 static void draw_text(cairo_t *cr, const char *font_family, double pt_size, bool bold,
                       double r, double g, double b, double a,
                       double x, double y, double max_w, PangoAlignment align,
@@ -84,6 +93,50 @@ static void draw_text(cairo_t *cr, const char *font_family, double pt_size, bool
 
     pango_font_description_free(desc);
     g_object_unref(layout);
+}
+
+static void draw_action_pills(cairo_t *cr, xdi_ui_t *ui, const xdi_notification_t *n,
+                              double x, double y, double max_w, int hit_base) {
+    int clickable = count_clickable_actions(n);
+    if (clickable <= 0) return;
+
+    double gap = 6.0;
+    double pill_h = 21.0;
+    double pill_w = fmin(104.0, (max_w - gap * (clickable - 1)) / (double)clickable);
+    if (pill_w < 46.0) pill_w = 46.0;
+
+    double top[3], bot[3];
+    xdi_accent_gradient(ui->cfg->accent_rgb, top, bot);
+
+    double cx = x;
+    for (int i = 0; i < n->action_count; i++) {
+        const xdi_notif_action_t *act = &n->actions[i];
+        if (act->kind == XDI_ACT_NONE || !act->label[0]) continue;
+        if (cx + pill_w > x + max_w + 1.0) break;
+
+        int hid = hit_base + i;
+        bool hov = (ui->hover_hit_id == hid);
+        add_hit(ui, hid, cx, y, pill_w, pill_h);
+
+        path_rounded_rect(cr, cx, y, pill_w, pill_h, pill_h * 0.5);
+        if (act->kind == XDI_ACT_KDE_REPLY) {
+            cairo_pattern_t *g = cairo_pattern_create_linear(cx, y, cx + pill_w, y + pill_h);
+            cairo_pattern_add_color_stop_rgba(g, 0.0, top[0], top[1], top[2], hov ? 0.96 : 0.80);
+            cairo_pattern_add_color_stop_rgba(g, 1.0, bot[0], bot[1], bot[2], hov ? 0.96 : 0.80);
+            cairo_set_source(cr, g);
+            cairo_fill(cr);
+            cairo_pattern_destroy(g);
+            draw_text(cr, ui->cfg->font_family, 7.8, true, 0.05, 0.05, 0.07, 0.98,
+                      cx + 4.0, y + 4.0, pill_w - 8.0, PANGO_ALIGN_CENTER, act->label);
+        } else {
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, hov ? 0.24 : 0.13);
+            cairo_fill(cr);
+            draw_text(cr, ui->cfg->font_family, 7.8, true, 1.0, 1.0, 1.0, 0.94,
+                      cx + 4.0, y + 4.0, pill_w - 8.0, PANGO_ALIGN_CENTER, act->label);
+        }
+
+        cx += pill_w + gap;
+    }
 }
 
 static void format_mmss(int64_t us, char *buf, size_t len) {
@@ -117,10 +170,8 @@ static void draw_icon_pause(cairo_t *cr, double cx, double cy, double sz) {
 static void draw_icon_prev(cairo_t *cr, double cx, double cy, double sz) {
     double h = sz * 0.68;
     double w = sz * 0.52;
-    /* Vertical bar */
     path_rounded_rect(cr, cx - w * 0.88, cy - h * 0.5, sz * 0.15, h, 1.5);
     cairo_fill(cr);
-    /* Left-pointing triangle */
     cairo_move_to(cr, cx - w * 0.55, cy);
     cairo_line_to(cr, cx + w * 0.55, cy - h * 0.5);
     cairo_line_to(cr, cx + w * 0.55, cy + h * 0.5);
@@ -131,13 +182,11 @@ static void draw_icon_prev(cairo_t *cr, double cx, double cy, double sz) {
 static void draw_icon_next(cairo_t *cr, double cx, double cy, double sz) {
     double h = sz * 0.68;
     double w = sz * 0.52;
-    /* Right-pointing triangle */
     cairo_move_to(cr, cx + w * 0.55, cy);
     cairo_line_to(cr, cx - w * 0.55, cy - h * 0.5);
     cairo_line_to(cr, cx - w * 0.55, cy + h * 0.5);
     cairo_close_path(cr);
     cairo_fill(cr);
-    /* Vertical bar */
     path_rounded_rect(cr, cx + w * 0.72, cy - h * 0.5, sz * 0.15, h, 1.5);
     cairo_fill(cr);
 }
@@ -240,7 +289,6 @@ static void draw_waveform(cairo_t *cr, const xdi_ui_t *ui,
                           double x, double y, double w, double h, bool playing) {
     uint32_t accent = ui->cfg->accent_rgb;
     if (ui->art->has_dominant) {
-        /* Subtle 40% blend toward album art's vibrant dominant hue for iOS magic! */
         int ar = (accent >> 16) & 0xFF, ag = (accent >> 8) & 0xFF, ab = accent & 0xFF;
         int dr = (ui->art->dominant_rgb >> 16) & 0xFF;
         int dg = (ui->art->dominant_rgb >> 8) & 0xFF;
@@ -262,13 +310,11 @@ static void draw_waveform(cairo_t *cr, const xdi_ui_t *ui,
 
     switch (ui->cfg->eq_style) {
     case XDI_EQ_WAVE: {
-        /* Dual-layered glowing silky harmonic waveform */
         double mid_y = y + h * 0.5;
         double max_amp = h * 0.44;
         double base_amp = fmax(0.10, ui->viz->rms * 0.95 + 0.15 * xdi_audio_viz_sample(ui->viz, 0.5));
         if (!playing) base_amp *= 0.25;
 
-        /* Secondary ghost harmonic wave */
         cairo_new_path(cr);
         for (int i = 0; i <= (int)w; i++) {
             double u = (double)i / w;
@@ -284,7 +330,6 @@ static void draw_waveform(cairo_t *cr, const xdi_ui_t *ui,
         cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
         cairo_stroke(cr);
 
-        /* Soft bloom glow under primary wave */
         cairo_new_path(cr);
         for (int i = 0; i <= (int)w; i++) {
             double u = (double)i / w;
@@ -301,7 +346,6 @@ static void draw_waveform(cairo_t *cr, const xdi_ui_t *ui,
             cairo_set_line_width(cr, 5.2);
             cairo_stroke_preserve(cr);
         }
-        /* Crisp primary foreground wave */
         cairo_set_source(cr, grad);
         cairo_set_line_width(cr, 2.2);
         cairo_stroke(cr);
@@ -309,7 +353,6 @@ static void draw_waveform(cairo_t *cr, const xdi_ui_t *ui,
     }
 
     case XDI_EQ_RIBBON: {
-        /* Mirrored liquid audio ribbon rippling continuously */
         double mid_y = y + h * 0.5;
         cairo_new_path(cr);
         for (int i = 0; i <= (int)w; i++) {
@@ -446,7 +489,6 @@ static void draw_album_art(cairo_t *cr, const xdi_ui_t *ui,
             cairo_paint(cr);
         }
     } else {
-        /* Stylish dark gradient vinyl/music fallback */
         double top[3], bot[3];
         xdi_accent_gradient(ui->cfg->accent_rgb, top, bot);
         cairo_pattern_t *g = cairo_pattern_create_linear(x, y, x + sz, y + sz);
@@ -462,7 +504,6 @@ static void draw_album_art(cairo_t *cr, const xdi_ui_t *ui,
     }
     cairo_restore(cr);
 
-    /* Subtle rim highlight around album art */
     cairo_save(cr);
     path_rounded_rect(cr, x + 0.5, y + 0.5, sz - 1.0, sz - 1.0, rad);
     cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.22);
@@ -500,12 +541,10 @@ static Visual *find_argb_visual(Display *dpy, int screen, int *out_depth) {
 }
 
 static void apply_ewmh_hints(xdi_ui_t *ui) {
-    /* Class hint for identification */
     XClassHint ch = {.res_name = "xdynamicisland", .res_class = "xdynamicisland"};
     XSetClassHint(ui->dpy, ui->win, &ch);
     XStoreName(ui->dpy, ui->win, "xdynamicisland");
 
-    /* Borderless Motif hints (matters when always_on_top == false and WM manages window) */
     motif_wm_hints_t mhints = {2, 0, 0, 0, 0};
     XChangeProperty(ui->dpy, ui->win, ui->atom_motif_hints, ui->atom_motif_hints,
                     32, PropModeReplace, (unsigned char *)&mhints, 5);
@@ -588,6 +627,9 @@ static bool create_island_window(xdi_ui_t *ui) {
                             (unsigned int)w, (unsigned int)h, 0,
                             ui->depth, InputOutput, ui->visual, mask, &swa);
     if (ui->win == None) return false;
+    ui->shape_w = 0;
+    ui->shape_h = 0;
+    ui->shape_r = 0;
 
     apply_ewmh_hints(ui);
     return true;
@@ -603,11 +645,14 @@ static void apply_non_composited_shape(xdi_ui_t *ui, int w, int h, double radius
     XSetForeground(ui->dpy, gc, 0);
     XFillRectangle(ui->dpy, mask, gc, 0, 0, (unsigned int)w, (unsigned int)h);
 
-    /* Draw exact rounded pill in 1-bit shape bitmap */
     int r = (int)round(radius);
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
     if (r < 0) r = 0;
+    if (w == ui->shape_w && h == ui->shape_h && r == ui->shape_r) return;
+    ui->shape_w = w;
+    ui->shape_h = h;
+    ui->shape_r = r;
     int d = r * 2;
 
     XSetForeground(ui->dpy, gc, 1);
@@ -668,7 +713,13 @@ static void compute_target_geometry(xdi_ui_t *ui, int64_t now_ms,
     const xdi_player_t *p = xdi_media_active(ui->media);
     bool has_media = (p != NULL && (p->status == XDI_PLAYBACK_PLAYING || p->title[0] != '\0'));
 
-    /* Mode transitions */
+    /* Pause toast expiration while hovered so users can click KDE Connect actions comfortably */
+    if (ui->mode == XDI_MODE_TOAST_NOTIF && ui->hovered && now_ms > 0) {
+        if (ui->toast_until_ms < now_ms + 1200) {
+            ui->toast_until_ms = now_ms + 1200;
+        }
+    }
+
     if (ui->mode == XDI_MODE_TOAST_NOTIF || ui->mode == XDI_MODE_TOAST_VOLUME) {
         if (now_ms >= ui->toast_until_ms) {
             ui->mode = has_media ? XDI_MODE_COMPACT_MEDIA : XDI_MODE_IDLE;
@@ -711,20 +762,33 @@ static void compute_target_geometry(xdi_ui_t *ui, int64_t now_ms,
         case XDI_MODE_EXPANDED_MEDIA:
             *tw = 392.0; *th = 158.0; *tr = 28.0;
             break;
-        case XDI_MODE_TOAST_NOTIF:
-            *tw = 368.0; *th = 68.0; *tr = 24.0;
+        case XDI_MODE_TOAST_NOTIF: {
+            bool has_actions = count_clickable_actions(&ui->notifs->latest) > 0;
+            *tw = 380.0;
+            *th = has_actions ? 98.0 : 68.0;
+            *tr = 24.0;
             break;
+        }
         case XDI_MODE_TOAST_VOLUME:
             *tw = 244.0; *th = 40.0; *tr = 20.0;
             break;
-        case XDI_MODE_NOTIF_HISTORY:
-            *tw = 400.0;
-            *th = (ui->notifs->count == 0) ? 132.0 : fmin(330.0, 68.0 + ui->notifs->count * 62.0);
+        case XDI_MODE_NOTIF_HISTORY: {
+            *tw = 406.0;
+            if (ui->notifs->count == 0) {
+                *th = 132.0;
+            } else {
+                double total = 62.0;
+                for (int i = 0; i < ui->notifs->count && total < 360.0; i++) {
+                    bool ha = count_clickable_actions(&ui->notifs->items[i]) > 0;
+                    total += (ha ? 84.0 : 56.0) + 6.0;
+                }
+                *th = fmin(360.0, total);
+            }
             *tr = 26.0;
             break;
+        }
     }
 
-    /* Horizontal alignment on monitor */
     int m = ui->cfg->margin;
     switch (ui->cfg->position) {
         case XDI_POS_TOP_LEFT:
@@ -742,7 +806,6 @@ static void compute_target_geometry(xdi_ui_t *ui, int64_t now_ms,
             break;
     }
 
-    /* Vertical alignment + obstacle clearance (dmenu, rofi, top/bottom panels) */
     bool is_bottom = (ui->cfg->position == XDI_POS_BOTTOM_CENTER ||
                       ui->cfg->position == XDI_POS_BOTTOM_LEFT ||
                       ui->cfg->position == XDI_POS_BOTTOM_RIGHT);
@@ -835,7 +898,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
     double pw = (double)pill_w;
     double ph = (double)pill_h;
 
-    /* 1. Soft multi-layered drop shadow when composited */
     if (ui->composited) {
         for (int i = 3; i >= 1; i--) {
             double spread = (double)i * 2.6;
@@ -846,7 +908,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         }
     }
 
-    /* 2. Obsidian Dynamic Island Pill Body */
     path_rounded_rect(cr, px, py, pw, ph, rad);
     double bg_alpha = ui->composited ? ui->cfg->opacity : 1.0;
     cairo_pattern_t *bg = cairo_pattern_create_linear(px, py, px, py + ph);
@@ -856,12 +917,10 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
     cairo_fill(cr);
     cairo_pattern_destroy(bg);
 
-    /* Clip all interior contents cleanly inside the rounded pill */
     cairo_save(cr);
     path_rounded_rect(cr, px, py, pw, ph, rad);
     cairo_clip(cr);
 
-    /* Subtle ambient radial accent glow when media is playing or toast active */
     const xdi_player_t *player = xdi_media_active(ui->media);
     bool playing = (player && player->status == XDI_PLAYBACK_PLAYING);
     if (playing || ui->mode == XDI_MODE_TOAST_NOTIF) {
@@ -884,9 +943,7 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
 
     const char *font = ui->cfg->font_family;
 
-    /* 3. Mode-Specific Content */
     if (ui->mode == XDI_MODE_IDLE) {
-        /* Sleek Idle Pill: Clock + Notification badge + Hover quick buttons */
         char time_str[16] = "";
         if (ui->cfg->show_clock_idle) {
             time_t now_t = time(NULL);
@@ -895,7 +952,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
             strftime(time_str, sizeof(time_str), "%H:%M", &tm_now);
         }
 
-        /* Subtle living status indicator dot */
         double top[3], bot[3];
         xdi_accent_gradient(ui->cfg->accent_rgb, top, bot);
         cairo_arc(cr, px + 18.0, py + ph * 0.5, 3.5, 0, 2.0 * M_PI);
@@ -907,7 +963,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
                       px + 30.0, py + (ph - 16.0) * 0.5, 64.0, PANGO_ALIGN_LEFT, time_str);
         }
 
-        /* Notification bell button with unread badge */
         double bell_cx = px + pw - (ui->hovered ? 52.0 : 24.0);
         double bell_cy = py + ph * 0.5;
         draw_circle_button(cr, ui, XDI_HIT_NOTIF_BTN, bell_cx, bell_cy, 13.0, false);
@@ -921,20 +976,17 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         }
 
         if (ui->hovered) {
-            /* Settings gear icon appears on hover */
             double gear_cx = px + pw - 22.0;
             draw_circle_button(cr, ui, XDI_HIT_SETTINGS_BTN, gear_cx, bell_cy, 13.0, false);
             cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.85);
             draw_icon_gear(cr, gear_cx, bell_cy, 13.5);
 
-            /* Volume mute quick button */
             double spk_cx = px + pw - 82.0;
             draw_circle_button(cr, ui, XDI_HIT_VOLUME_MUTE, spk_cx, bell_cy, 13.0, false);
             cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, ui->media->volume.muted ? 0.45 : 0.85);
             draw_icon_speaker(cr, spk_cx, bell_cy, 13.0, ui->media->volume.volume, ui->media->volume.muted);
         }
     } else if (ui->mode == XDI_MODE_COMPACT_MEDIA && player) {
-        /* Compact Media Pill: Album Art + Title + Sexy Waveform */
         double art_sz = 26.0;
         draw_album_art(cr, ui, px + 6.0, py + (ph - art_sz) * 0.5, art_sz, true);
 
@@ -956,20 +1008,17 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         draw_text(cr, font, 9.5, true, 1.0, 1.0, 1.0, 0.96,
                   tx, py + (ph - 15.0) * 0.5, fmax(20.0, tw), PANGO_ALIGN_LEFT, label);
 
-        /* Tiny red dot if unread notifications exist */
         if (ui->notifs->unread_count > 0) {
             cairo_arc(cr, px + pw - 8.0, py + 9.0, 3.2, 0, 2.0 * M_PI);
             cairo_set_source_rgba(cr, 1.0, 0.26, 0.30, 0.95);
             cairo_fill(cr);
         }
     } else if (ui->mode == XDI_MODE_EXPANDED_MEDIA && player) {
-        /* Expanded Media Card */
         double art_sz = 56.0;
         double art_x = px + 16.0;
         double art_y = py + 15.0;
         draw_album_art(cr, ui, art_x, art_y, art_sz, false);
 
-        /* Top-right utility buttons (Settings + Notification Bell + Waveform) */
         double gear_cx = px + pw - 22.0;
         double bell_cx = px + pw - 50.0;
         double util_cy = py + 24.0;
@@ -986,14 +1035,11 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
             cairo_fill(cr);
         }
 
-        /* Taller waveform right under utility buttons */
         draw_waveform(cr, ui, px + pw - 64.0, py + 43.0, 48.0, 24.0, playing);
 
-        /* Track Metadata */
         double mx = art_x + art_sz + 13.0;
         double mw = (px + pw - 74.0) - mx;
 
-        /* Source badge + multi-player switcher */
         double sx = mx;
         if (player->is_kdeconnect) {
             cairo_set_source_rgba(cr, 0.55, 0.80, 1.0, 0.92);
@@ -1020,7 +1066,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         draw_text(cr, font, 8.8, false, 0.66, 0.67, 0.71, 0.92,
                   mx, py + 50.0, mw, PANGO_ALIGN_LEFT, artist);
 
-        /* Progress / Scrub Bar */
         double bar_y = py + 86.0;
         double bar_x = px + 50.0;
         double bar_w = pw - 100.0;
@@ -1030,18 +1075,21 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         if (frac > 1.0) frac = 1.0;
 
         char t_cur[16], t_tot[16];
-        format_mmss(pos_us, t_cur, sizeof(t_cur));
         if (player->length_us > 0) {
+            format_mmss(pos_us, t_cur, sizeof(t_cur));
             format_mmss(player->length_us, t_tot, sizeof(t_tot));
         } else {
+            snprintf(t_cur, sizeof(t_cur), playing ? "LIVE" : "PAUSED");
             snprintf(t_tot, sizeof(t_tot), "--:--");
         }
-        draw_text(cr, font, 7.8, false, 0.62, 0.63, 0.68, 0.9,
-                  px + 14.0, bar_y - 4.0, 34.0, PANGO_ALIGN_LEFT, t_cur);
-        draw_text(cr, font, 7.8, false, 0.62, 0.63, 0.68, 0.9,
+        draw_text(cr, font, 7.6, false, 0.62, 0.63, 0.68, 0.9,
+                  px + 14.0, bar_y - 4.0, 36.0, PANGO_ALIGN_LEFT, t_cur);
+        draw_text(cr, font, 7.6, false, 0.62, 0.63, 0.68, 0.9,
                   px + pw - 46.0, bar_y - 4.0, 34.0, PANGO_ALIGN_RIGHT, t_tot);
 
-        add_hit(ui, XDI_HIT_SEEK_BAR, bar_x - 4.0, bar_y - 7.0, bar_w + 8.0, 18.0);
+        if (player->length_us > 0) {
+            add_hit(ui, XDI_HIT_SEEK_BAR, bar_x - 4.0, bar_y - 7.0, bar_w + 8.0, 18.0);
+        }
         path_rounded_rect(cr, bar_x, bar_y, bar_w, 4.5, 2.25);
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.18);
         cairo_fill(cr);
@@ -1064,7 +1112,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
             }
         }
 
-        /* Bottom Control Deck: Prev / PlayPause / Next + wpctl Volume Slider */
         double ctrl_cy = py + 126.0;
         double center_x = px + pw * 0.38;
 
@@ -1081,7 +1128,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.94);
         draw_icon_next(cr, center_x + 50.0, ctrl_cy, 16.0);
 
-        /* Right-side wpctl Volume Control */
         double vol_spk_x = px + pw - 116.0;
         draw_circle_button(cr, ui, XDI_HIT_VOLUME_MUTE, vol_spk_x, ctrl_cy, 14.0, false);
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, ui->media->volume.muted ? 0.45 : 0.9);
@@ -1101,11 +1147,12 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
             cairo_fill(cr);
         }
     } else if (ui->mode == XDI_MODE_TOAST_NOTIF) {
-        /* Live Notification Toast Banner */
         const xdi_notification_t *n = &ui->notifs->latest;
+        bool has_actions = count_clickable_actions(n) > 0;
         double badge_r = 18.0;
-        double bx = px + 26.0;
-        double by = py + ph * 0.5;
+        double bx = px + 28.0;
+        double by = py + (has_actions ? 34.0 : ph * 0.5);
+
         double top[3], bot[3];
         xdi_accent_gradient(n->urgency >= 2 ? 0xFF3B30 : ui->cfg->accent_rgb, top, bot);
         cairo_pattern_t *g = cairo_pattern_create_linear(bx, by - badge_r, bx, by + badge_r);
@@ -1117,21 +1164,27 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         cairo_pattern_destroy(g);
 
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.98);
-        draw_icon_bell(cr, bx, by, 16.0);
+        if (n->is_kdeconnect) draw_icon_phone(cr, bx, by, 16.0);
+        else                  draw_icon_bell(cr, bx, by, 16.0);
 
         double tx = px + 56.0;
         double tw = pw - 74.0;
         char header[260];
         snprintf(header, sizeof(header), "%s  ·  %s", n->app_name, n->summary);
-        draw_text(cr, font, 9.5, true, 1.0, 1.0, 1.0, 0.98,
-                  tx, py + 14.0, tw, PANGO_ALIGN_LEFT, header);
+        draw_text(cr, font, 9.4, true, 1.0, 1.0, 1.0, 0.98,
+                  tx, py + 13.0, tw, PANGO_ALIGN_LEFT, header);
         if (n->body[0]) {
-            draw_text(cr, font, 8.6, false, 0.72, 0.74, 0.78, 0.92,
-                      tx, py + 35.0, tw, PANGO_ALIGN_LEFT, n->body);
+            draw_text(cr, font, 8.5, false, 0.72, 0.74, 0.78, 0.92,
+                      tx, py + 34.0, tw, PANGO_ALIGN_LEFT, n->body);
         }
+
+        /* Background tap opens notification history; action pills registered afterward override it */
         add_hit(ui, XDI_HIT_NOTIF_BTN, px, py, pw, ph);
+        if (has_actions) {
+            draw_action_pills(cr, ui, n, px + 16.0, py + ph - 30.0, pw - 32.0,
+                              XDI_HIT_TOAST_ACTION_BASE);
+        }
     } else if (ui->mode == XDI_MODE_TOAST_VOLUME) {
-        /* Inline wpctl Volume OSD Toast */
         double cy = py + ph * 0.5;
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, ui->media->volume.muted ? 0.5 : 0.95);
         draw_icon_speaker(cr, px + 24.0, cy, 16.0, ui->media->volume.volume, ui->media->volume.muted);
@@ -1161,7 +1214,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         draw_text(cr, font, 9.0, true, 1.0, 1.0, 1.0, 0.94,
                   px + pw - 46.0, cy - 8.0, 36.0, PANGO_ALIGN_RIGHT, pct);
     } else if (ui->mode == XDI_MODE_NOTIF_HISTORY) {
-        /* Scrollable Notification History Drawer (from notification-daemon) */
         double hdr_y = py + 14.0;
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.92);
         draw_icon_bell(cr, px + 24.0, hdr_y + 9.0, 14.0);
@@ -1171,7 +1223,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         draw_text(cr, font, 10.0, true, 1.0, 1.0, 1.0, 0.98,
                   px + 40.0, hdr_y + 1.0, 190.0, PANGO_ALIGN_LEFT, title);
 
-        /* Clear All button */
         if (ui->notifs->count > 0) {
             double cx = px + pw - 96.0;
             double cy = hdr_y - 1.0;
@@ -1184,7 +1235,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
                       cx, cy + 4.0, 56.0, PANGO_ALIGN_CENTER, "Clear");
         }
 
-        /* Close button */
         double close_cx = px + pw - 22.0;
         double close_cy = hdr_y + 10.0;
         draw_circle_button(cr, ui, XDI_HIT_CLOSE_NOTIFS, close_cx, close_cy, 11.0, false);
@@ -1196,7 +1246,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
         cairo_line_to(cr, close_cx - 4.0, close_cy + 4.0);
         cairo_stroke(cr);
 
-        /* Divider line */
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.10);
         cairo_set_line_width(cr, 1.0);
         cairo_move_to(cr, px + 14.0, py + 44.0);
@@ -1212,11 +1261,14 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
                       "No notifications yet");
             draw_text(cr, font, 7.8, false, 0.48, 0.50, 0.56, 0.85,
                       px + 18.0, list_top + 38.0, pw - 36.0, PANGO_ALIGN_CENTER,
-                      "Monitoring notification-daemon via D-Bus");
+                      "Monitoring notification-daemon & KDE Connect");
         } else {
-            double row_h = 56.0;
             double gap = 6.0;
-            double content_h = ui->notifs->count * (row_h + gap);
+            double content_h = 0.0;
+            for (int i = 0; i < ui->notifs->count; i++) {
+                bool ha = count_clickable_actions(&ui->notifs->items[i]) > 0;
+                content_h += (ha ? 84.0 : 56.0) + gap;
+            }
             ui->notif_scroll_max = (content_h > list_h) ? (int)(content_h - list_h) : 0;
             if (ui->notif_scroll < 0.0) ui->notif_scroll = 0.0;
             if (ui->notif_scroll > ui->notif_scroll_max) ui->notif_scroll = ui->notif_scroll_max;
@@ -1226,33 +1278,42 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
             cairo_clip(cr);
 
             time_t now_t = time(NULL);
+            double cur_y = list_top - ui->notif_scroll;
             for (int i = 0; i < ui->notifs->count; i++) {
-                double ry = list_top + i * (row_h + gap) - ui->notif_scroll;
+                const xdi_notification_t *n = &ui->notifs->items[i];
+                bool has_actions = count_clickable_actions(n) > 0;
+                double row_h = has_actions ? 84.0 : 56.0;
+                double ry = cur_y;
+                cur_y += row_h + gap;
+
                 if (ry + row_h < list_top || ry > list_top + list_h) continue;
 
-                const xdi_notification_t *n = &ui->notifs->items[i];
                 double rx = px + 12.0;
                 double rw = pw - 24.0;
                 path_rounded_rect(cr, rx, ry, rw, row_h, 13.0);
                 cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.07);
                 cairo_fill(cr);
 
-                /* Urgency accent dot */
-                double top[3], bot[3];
-                xdi_accent_gradient(n->urgency >= 2 ? 0xFF3B30 : ui->cfg->accent_rgb, top, bot);
-                cairo_arc(cr, rx + 12.0, ry + 15.0, 3.2, 0, 2.0 * M_PI);
-                cairo_set_source_rgba(cr, top[0], top[1], top[2], 0.95);
-                cairo_fill(cr);
+                double app_x = rx + 22.0;
+                if (n->is_kdeconnect) {
+                    cairo_set_source_rgba(cr, 0.55, 0.80, 1.0, 0.92);
+                    draw_icon_phone(cr, rx + 13.0, ry + 14.5, 11.0);
+                } else {
+                    double top[3], bot[3];
+                    xdi_accent_gradient(n->urgency >= 2 ? 0xFF3B30 : ui->cfg->accent_rgb, top, bot);
+                    cairo_arc(cr, rx + 12.0, ry + 15.0, 3.2, 0, 2.0 * M_PI);
+                    cairo_set_source_rgba(cr, top[0], top[1], top[2], 0.95);
+                    cairo_fill(cr);
+                }
 
                 draw_text(cr, font, 8.0, true, 0.70, 0.73, 0.79, 0.95,
-                          rx + 22.0, ry + 8.0, rw - 110.0, PANGO_ALIGN_LEFT, n->app_name);
+                          app_x, ry + 8.0, rw - 110.0, PANGO_ALIGN_LEFT, n->app_name);
 
                 char tbuf[24];
                 xdi_notif_format_time(n->timestamp, now_t, tbuf, sizeof(tbuf));
                 draw_text(cr, font, 7.6, false, 0.55, 0.57, 0.62, 0.9,
                           rx + rw - 78.0, ry + 8.0, 46.0, PANGO_ALIGN_RIGHT, tbuf);
 
-                /* Per-notification dismiss 'x' */
                 if (i < 24) {
                     int hid = XDI_HIT_NOTIF_DISMISS_BASE + i;
                     double dx = rx + rw - 17.0;
@@ -1274,14 +1335,18 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
                     draw_text(cr, font, 8.0, false, 0.66, 0.68, 0.73, 0.88,
                               rx + 12.0, ry + 38.0, rw - 24.0, PANGO_ALIGN_LEFT, n->body);
                 }
+
+                if (has_actions && i < 24) {
+                    draw_action_pills(cr, ui, n, rx + 10.0, ry + 57.0, rw - 20.0,
+                                      XDI_HIT_NOTIF_ACTION_BASE + i * XDI_NOTIF_MAX_ACTIONS);
+                }
             }
             cairo_restore(cr);
         }
     }
 
-    cairo_restore(cr); /* End interior clip */
+    cairo_restore(cr);
 
-    /* 4. Crisp Specular Hardware Rim Highlight */
     path_rounded_rect(cr, px + 0.5, py + 0.5, pw - 1.0, ph - 1.0, rad);
     cairo_pattern_t *rim = cairo_pattern_create_linear(px, py, px, py + ph);
     cairo_pattern_add_color_stop_rgba(rim, 0.0, 1.0, 1.0, 1.0, 0.20);
@@ -1294,7 +1359,6 @@ static void render_frame(xdi_ui_t *ui, int64_t now_ms) {
 
     cairo_destroy(cr);
 
-    /* Blit back buffer to X11 window surface atomically (zero flicker!) */
     cairo_t *xcr = cairo_create(ui->xlib_surf);
     cairo_set_operator(xcr, CAIRO_OPERATOR_SOURCE);
     cairo_set_source_surface(xcr, ui->back_surf, 0, 0);
@@ -1331,8 +1395,10 @@ bool xdi_ui_init(xdi_ui_t *ui, Display *dpy, xdi_config_t *cfg,
     ui->atom_state_skip_pager = XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False);
     ui->atom_motif_hints = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
     ui->atom_net_active = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
+    ui->atom_net_clients = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
+    ui->atom_net_stacking = XInternAtom(dpy, "_NET_CLIENT_LIST_STACKING", False);
+    ui->atom_net_workarea = XInternAtom(dpy, "_NET_WORKAREA", False);
 
-    /* Listen to Root SubstructureNotify for instant zero-poll dmenu / rofi detection! */
     XSelectInput(dpy, ui->root, SubstructureNotifyMask | PropertyChangeMask);
     XRRSelectInput(dpy, ui->root, RRScreenChangeNotifyMask);
 
@@ -1351,7 +1417,6 @@ bool xdi_ui_init(xdi_ui_t *ui, Display *dpy, xdi_config_t *cfg,
 
     if (!create_island_window(ui)) return false;
 
-    /* Initial geometry snap */
     double tw, th, tr, tx, ty;
     compute_target_geometry(ui, 0, &tw, &th, &tr, &tx, &ty);
     xdi_spring_snap(&ui->sp_w, tw);
@@ -1428,7 +1493,6 @@ void xdi_ui_show_notif_toast(xdi_ui_t *ui, int64_t now_ms) {
 }
 
 static void handle_click(xdi_ui_t *ui, int button, double x, double y, int64_t now_ms) {
-    /* Scroll wheel: scroll notification history or adjust wpctl volume */
     if (button == 4 || button == 5) {
         if (ui->mode == XDI_MODE_NOTIF_HISTORY) {
             ui->notif_scroll += (button == 4) ? -32.0 : 32.0;
@@ -1443,7 +1507,6 @@ static void handle_click(xdi_ui_t *ui, int button, double x, double y, int64_t n
         return;
     }
 
-    /* Right-click toggles Settings (or dismisses toast) */
     if (button == 3) {
         if (ui->mode == XDI_MODE_TOAST_NOTIF || ui->mode == XDI_MODE_TOAST_VOLUME) {
             ui->toast_until_ms = now_ms;
@@ -1519,9 +1582,21 @@ static void handle_click(xdi_ui_t *ui, int button, double x, double y, int64_t n
             ui->needs_redraw = true;
             break;
         default:
-            if (hit >= XDI_HIT_NOTIF_DISMISS_BASE) {
+            if (hit >= XDI_HIT_NOTIF_ACTION_BASE) {
+                int rel = hit - XDI_HIT_NOTIF_ACTION_BASE;
+                int row_idx = rel / XDI_NOTIF_MAX_ACTIONS;
+                int act_idx = rel % XDI_NOTIF_MAX_ACTIONS;
+                xdi_notif_invoke_action(ui->notifs, row_idx, act_idx);
+                ui->needs_redraw = true;
+            } else if (hit >= XDI_HIT_NOTIF_DISMISS_BASE) {
                 int idx = hit - XDI_HIT_NOTIF_DISMISS_BASE;
                 xdi_notif_remove_at(ui->notifs, idx);
+                ui->needs_redraw = true;
+            } else if (hit >= XDI_HIT_TOAST_ACTION_BASE &&
+                       hit < XDI_HIT_TOAST_ACTION_BASE + XDI_NOTIF_MAX_ACTIONS) {
+                int act_idx = hit - XDI_HIT_TOAST_ACTION_BASE;
+                xdi_notif_invoke_latest_action(ui->notifs, act_idx);
+                ui->toast_until_ms = now_ms;
                 ui->needs_redraw = true;
             } else if (ui->mode == XDI_MODE_COMPACT_MEDIA) {
                 ui->pinned_open = true;
@@ -1538,7 +1613,6 @@ static void handle_click(xdi_ui_t *ui, int button, double x, double y, int64_t n
 }
 
 void xdi_ui_handle_event(xdi_ui_t *ui, const XEvent *ev, int64_t now_ms) {
-    /* Root window SubstructureNotify: instant notification when dmenu/rofi/bars map or close! */
     if (ev->xany.window == ui->root) {
         switch (ev->type) {
             case MapNotify:
@@ -1549,11 +1623,15 @@ void xdi_ui_handle_event(xdi_ui_t *ui, const XEvent *ev, int64_t now_ms) {
                     ui->obstacles_dirty = true;
                 }
                 break;
-            case PropertyNotify:
-                ui->obstacles_dirty = true;
+            case PropertyNotify: {
+                Atom pa = ev->xproperty.atom;
+                if (pa == ui->atom_net_clients || pa == ui->atom_net_stacking ||
+                    pa == ui->atom_net_active || pa == ui->atom_net_workarea) {
+                    ui->obstacles_dirty = true;
+                }
                 break;
+            }
             default:
-                /* XRandR screen change */
                 xdi_ui_update_monitor(ui);
                 ui->obstacles_dirty = true;
                 ui->needs_redraw = true;
@@ -1602,7 +1680,6 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
     if (dt > 0.08) dt = 0.08;
     ui->last_frame_ms = now_ms;
 
-    /* Graceful 260ms hover-leave debounce so moving mouse across buttons doesn't flicker */
     if (ui->hover_leave_ms > 0 && (now_ms - ui->hover_leave_ms) >= 260) {
         ui->hovered = false;
         ui->hover_leave_ms = 0;
@@ -1612,7 +1689,6 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
         ui->needs_redraw = true;
     }
 
-    /* Check for media / volume / notification events */
     if (ui->media->state_changed) {
         ui->media->state_changed = false;
         const xdi_player_t *p = xdi_media_active(ui->media);
@@ -1627,11 +1703,14 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
         ui->notifs->has_new_toast = false;
         xdi_ui_show_notif_toast(ui, now_ms);
     }
+    if (ui->notifs->changed) {
+        ui->notifs->changed = false;
+        ui->needs_redraw = true;
+    }
     if (xdi_art_poll(ui->art)) {
         ui->needs_redraw = true;
     }
 
-    /* Refresh dmenu / rofi / top-panel obstacles whenever root tree changes (or periodically) */
     if (ui->obstacles_dirty || (now_ms - ui->last_obstacle_check_ms) >= 600) {
         ui->obstacles_dirty = false;
         ui->last_obstacle_check_ms = now_ms;
@@ -1648,8 +1727,6 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
             ui->needs_redraw = true;
         }
 
-        /* Stacking order maintenance: stay above normal windows if always_on_top,
-         * while yielding cleanly below active dmenu/launcher blockers */
         if (ui->mapped && ui->cfg->always_on_top) {
             Window blocker = ui->obstacles.top_blocker != None
                                  ? ui->obstacles.top_blocker
@@ -1665,11 +1742,9 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
         }
     }
 
-    /* Recompute target dimensions & position */
     double tw, th, tr, tx, ty;
     compute_target_geometry(ui, now_ms, &tw, &th, &tr, &tx, &ty);
 
-    /* Map / unmap for hide_when_idle */
     if (ui->mode == XDI_MODE_HIDDEN) {
         if (ui->mapped) {
             XUnmapWindow(ui->dpy, ui->win);
@@ -1692,12 +1767,13 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
     xdi_spring_set_target(&ui->sp_x, tx);
     xdi_spring_set_target(&ui->sp_y, ty);
 
-    bool animating = false;
-    animating |= xdi_spring_step(&ui->sp_w, dt);
-    animating |= xdi_spring_step(&ui->sp_h, dt);
-    animating |= xdi_spring_step(&ui->sp_r, dt);
-    animating |= xdi_spring_step(&ui->sp_x, dt);
-    animating |= xdi_spring_step(&ui->sp_y, dt);
+    bool springs_moving = false;
+    springs_moving |= xdi_spring_step(&ui->sp_w, dt);
+    springs_moving |= xdi_spring_step(&ui->sp_h, dt);
+    springs_moving |= xdi_spring_step(&ui->sp_r, dt);
+    springs_moving |= xdi_spring_step(&ui->sp_x, dt);
+    springs_moving |= xdi_spring_step(&ui->sp_y, dt);
+    bool animating = springs_moving;
 
     const xdi_player_t *player = xdi_media_active(ui->media);
     bool playing = (player && player->status == XDI_PLAYBACK_PLAYING);
@@ -1714,7 +1790,6 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
         animating = true;
     }
 
-    /* Update clock minute / toast expiration / seek bar */
     static int last_minute = -1;
     if (ui->mode == XDI_MODE_IDLE && ui->cfg->show_clock_idle) {
         time_t t = time(NULL);
@@ -1725,16 +1800,29 @@ int xdi_ui_tick(xdi_ui_t *ui, int64_t now_ms, Window settings_win) {
         }
     }
 
+    int target_interval = springs_moving ? 16 : 24;
     if (animating || ui->needs_redraw) {
-        ui->needs_redraw = false;
-        render_frame(ui, now_ms);
+        int64_t elapsed = (ui->last_render_ms > 0) ? (now_ms - ui->last_render_ms) : 100;
+        int min_interval = ui->needs_redraw ? 4 : target_interval;
+        if (elapsed >= min_interval) {
+            ui->needs_redraw = false;
+            ui->last_render_ms = now_ms;
+            render_frame(ui, now_ms);
+        } else {
+            int rem = min_interval - (int)elapsed;
+            return rem > 0 ? rem : 1;
+        }
     }
 
-    if (animating) return 16; /* Smooth 60fps */
+    if (animating) {
+        int64_t elapsed = now_ms - ui->last_render_ms;
+        int rem = target_interval - (int)elapsed;
+        return rem > 1 ? rem : 1;
+    }
     if (ui->hover_leave_ms > 0) return 40;
     if (ui->mode == XDI_MODE_TOAST_NOTIF || ui->mode == XDI_MODE_TOAST_VOLUME) {
         int rem = (int)(ui->toast_until_ms - now_ms);
         return (rem > 20 && rem < 250) ? rem : 100;
     }
-    return 450; /* Low-power idle sleep (0.0% CPU!) */
+    return 450;
 }

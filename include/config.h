@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define XDI_VERSION "1.0.0"
+#define XDI_VERSION "1.1.0"
 
 typedef enum {
     XDI_POS_TOP_CENTER = 0,

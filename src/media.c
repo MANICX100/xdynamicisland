@@ -1,4 +1,5 @@
 #include "media.h"
+#include "mpv.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -219,7 +220,7 @@ static void fetch_dbus_string_prop(DBusConnection *conn, const char *dest, const
 }
 
 static void fetch_player_all_props(xdi_media_t *m, xdi_player_t *p) {
-    if (!m->conn) return;
+    if (!m->conn || p->is_mpv_native) return;
     p->is_kdeconnect = (strstr(p->bus_name, "kdeconnect") != NULL);
 
     /* Identity from org.mpris.MediaPlayer2 */
@@ -300,7 +301,7 @@ static void fetch_player_all_props(xdi_media_t *m, xdi_player_t *p) {
 }
 
 static void fetch_player_position(xdi_media_t *m, xdi_player_t *p) {
-    if (!m->conn || !p) return;
+    if (!m->conn || !p || p->is_mpv_native) return;
     DBusMessage *msg = dbus_message_new_method_call(p->bus_name, "/org/mpris/MediaPlayer2",
                                                     "org.freedesktop.DBus.Properties", "Get");
     if (!msg) return;
@@ -330,7 +331,6 @@ static void fetch_player_position(xdi_media_t *m, xdi_player_t *p) {
     dbus_message_unref(reply);
 }
 
-/* Query KDE Connect daemon for paired reachable device name (non-fatal if absent) */
 static void probe_kdeconnect_device(xdi_media_t *m) {
     if (!m->conn) return;
     DBusMessage *msg = dbus_message_new_method_call(
@@ -373,19 +373,11 @@ static void probe_kdeconnect_device(xdi_media_t *m) {
 int xdi_select_best_player(const xdi_player_t *players, int count, int current_idx, bool manual) {
     if (!players || count <= 0) return -1;
     if (manual && current_idx >= 0 && current_idx < count) {
-        /* Keep user-selected player if it still has a track or is playing */
         if (players[current_idx].status == XDI_PLAYBACK_PLAYING ||
             players[current_idx].title[0] != '\0') {
             return current_idx;
         }
     }
-    /* Priority:
-     * 1. Currently Playing player with a title (prefer current if already playing)
-     * 2. Any Playing player
-     * 3. Paused player with a title (prefer current if paused with title)
-     * 4. First player with a title
-     * 5. Index 0
-     */
     if (current_idx >= 0 && current_idx < count &&
         players[current_idx].status == XDI_PLAYBACK_PLAYING &&
         players[current_idx].title[0] != '\0') {
@@ -437,6 +429,40 @@ static void remove_player(xdi_media_t *m, const char *bus_name) {
     } else if (m->active_index > idx) {
         m->active_index--;
     }
+    m->active_index = xdi_select_best_player(m->players, m->player_count,
+                                             m->active_index, m->manual_selection);
+    m->state_changed = true;
+}
+
+static bool has_mpris_mpv(const xdi_media_t *m) {
+    for (int i = 0; i < m->player_count; i++) {
+        if (!m->players[i].is_mpv_native &&
+            strstr(m->players[i].bus_name, "mpv") != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void sync_native_mpv(xdi_media_t *m, int64_t now_ms) {
+    if (!m->mpv) return;
+    xdi_mpv_poll(m->mpv, now_ms, has_mpris_mpv(m));
+    if (!m->mpv->state_changed) return;
+    m->mpv->state_changed = false;
+
+    static const char *const native_bus = "xdi.native.mpv";
+    if (!m->mpv->active) {
+        remove_player(m, native_bus);
+        return;
+    }
+
+    int idx = find_player(m, native_bus);
+    if (idx < 0) {
+        if (m->player_count >= XDI_MAX_PLAYERS) return;
+        idx = m->player_count++;
+    }
+    m->players[idx] = m->mpv->player;
+    m->players[idx].is_mpv_native = true;
     m->active_index = xdi_select_best_player(m->players, m->player_count,
                                              m->active_index, m->manual_selection);
     m->state_changed = true;
@@ -499,9 +525,10 @@ static DBusHandlerResult mpris_filter(DBusConnection *conn, DBusMessage *msg, vo
         if (!path || strcmp(path, "/org/mpris/MediaPlayer2") != 0) {
             return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
         }
-        /* Re-sync all known players on MPRIS property change (cheap & handles unique-name senders reliably) */
         for (int i = 0; i < m->player_count; i++) {
-            fetch_player_all_props(m, &m->players[i]);
+            if (!m->players[i].is_mpv_native) {
+                fetch_player_all_props(m, &m->players[i]);
+            }
         }
         m->active_index = xdi_select_best_player(m->players, m->player_count,
                                                  m->active_index, m->manual_selection);
@@ -512,7 +539,8 @@ static DBusHandlerResult mpris_filter(DBusConnection *conn, DBusMessage *msg, vo
     if (dbus_message_is_signal(msg, "org.mpris.MediaPlayer2.Player", "Seeked")) {
         int64_t pos = 0;
         if (dbus_message_get_args(msg, NULL, DBUS_TYPE_INT64, &pos, DBUS_TYPE_INVALID)) {
-            if (m->active_index >= 0 && m->active_index < m->player_count) {
+            if (m->active_index >= 0 && m->active_index < m->player_count &&
+                !m->players[m->active_index].is_mpv_native) {
                 m->players[m->active_index].position_us = pos;
                 m->players[m->active_index].pos_timestamp_ms = monotonic_ms();
                 m->state_changed = true;
@@ -557,6 +585,12 @@ bool xdi_media_init(xdi_media_t *m) {
     return m->conn != NULL || m->volume.available;
 }
 
+void xdi_media_attach_mpv(xdi_media_t *m, struct xdi_mpv_s *mpv) {
+    if (!m) return;
+    m->mpv = mpv;
+    sync_native_mpv(m, monotonic_ms());
+}
+
 void xdi_media_destroy(xdi_media_t *m) {
     if (!m) return;
     if (m->conn) {
@@ -564,6 +598,7 @@ void xdi_media_destroy(xdi_media_t *m) {
         dbus_connection_unref(m->conn);
         m->conn = NULL;
     }
+    m->mpv = NULL;
 }
 
 int xdi_media_get_fd(xdi_media_t *m) {
@@ -578,9 +613,11 @@ void xdi_media_poll(xdi_media_t *m, int64_t now_ms) {
     if (m->conn) {
         dbus_connection_read_write(m->conn, 0);
         while (dbus_connection_dispatch(m->conn) == DBUS_DISPATCH_DATA_REMAINS) {
-            /* Drain all queued MPRIS signals */
+            /* Drain all queued MPRIS + KDE Connect signals */
         }
     }
+
+    sync_native_mpv(m, now_ms);
 
     /* Periodically poll wpctl volume (every 900ms) so external hardware volume keys trigger OSD toast */
     if (now_ms - m->last_vol_poll_ms >= 900) {
@@ -592,7 +629,8 @@ void xdi_media_poll(xdi_media_t *m, int64_t now_ms) {
     if (now_ms - m->last_pos_poll_ms >= 3000) {
         m->last_pos_poll_ms = now_ms;
         if (m->active_index >= 0 && m->active_index < m->player_count &&
-            m->players[m->active_index].status == XDI_PLAYBACK_PLAYING) {
+            m->players[m->active_index].status == XDI_PLAYBACK_PLAYING &&
+            !m->players[m->active_index].is_mpv_native) {
             fetch_player_position(m, &m->players[m->active_index]);
         }
     }
@@ -626,21 +664,44 @@ static void send_mpris_method(xdi_media_t *m, const char *method) {
 }
 
 void xdi_media_play_pause(xdi_media_t *m) {
+    if (!m || m->active_index < 0 || m->active_index >= m->player_count) return;
+    if (m->players[m->active_index].is_mpv_native && m->mpv) {
+        int64_t now = monotonic_ms();
+        xdi_mpv_play_pause(m->mpv, now);
+        sync_native_mpv(m, now);
+        return;
+    }
     send_mpris_method(m, "PlayPause");
 }
 
 void xdi_media_next(xdi_media_t *m) {
+    if (!m || m->active_index < 0 || m->active_index >= m->player_count) return;
+    if (m->players[m->active_index].is_mpv_native && m->mpv) {
+        xdi_mpv_next(m->mpv);
+        return;
+    }
     send_mpris_method(m, "Next");
 }
 
 void xdi_media_prev(xdi_media_t *m) {
+    if (!m || m->active_index < 0 || m->active_index >= m->player_count) return;
+    if (m->players[m->active_index].is_mpv_native && m->mpv) {
+        xdi_mpv_prev(m->mpv);
+        return;
+    }
     send_mpris_method(m, "Previous");
 }
 
 void xdi_media_seek_fraction(xdi_media_t *m, double frac) {
-    if (!m || !m->conn || m->active_index < 0 || m->active_index >= m->player_count) return;
+    if (!m || m->active_index < 0 || m->active_index >= m->player_count) return;
     xdi_player_t *p = &m->players[m->active_index];
-    if (p->length_us <= 0) return;
+    if (p->is_mpv_native && m->mpv) {
+        int64_t now = monotonic_ms();
+        xdi_mpv_seek_fraction(m->mpv, frac, now);
+        sync_native_mpv(m, now);
+        return;
+    }
+    if (!m->conn || p->length_us <= 0) return;
     if (frac < 0.0) frac = 0.0;
     if (frac > 1.0) frac = 1.0;
 
@@ -681,14 +742,13 @@ void xdi_media_volume_delta(xdi_media_t *m, int delta_percent) {
     const char *const argv[] = {"wpctl", "set-volume", "-l", "1.25", "@DEFAULT_AUDIO_SINK@", arg, NULL};
     run_cmd_detached(argv);
 
-    /* Optimistically update local state immediately for zero-latency UI response */
     double nv = m->volume.volume + (double)delta_percent / 100.0;
     if (nv < 0.0) nv = 0.0;
     if (nv > 1.25) nv = 1.25;
     m->volume.volume = nv;
     m->volume.available = true;
     m->volume_changed = true;
-    m->last_vol_poll_ms = monotonic_ms() - 700; /* Re-sync exact value soon */
+    m->last_vol_poll_ms = monotonic_ms() - 700;
 }
 
 void xdi_media_volume_set(xdi_media_t *m, double fraction) {

@@ -11,7 +11,9 @@
 #include "art.h"
 #include "audio_viz.h"
 #include "config.h"
+#include "instance.h"
 #include "media.h"
+#include "mpv.h"
 #include "notifications.h"
 #include "settings_ui.h"
 #include "ui.h"
@@ -23,8 +25,6 @@ static void handle_signal(int sig) {
     g_running = 0;
 }
 
-/* Resilient X11 error handler: transient BadWindow/BadDrawable errors can happen
- * when an ephemeral override-redirect window like dmenu closes mid-frame. */
 static int x11_error_handler(Display *dpy, XErrorEvent *ev) {
     if (ev->error_code == BadWindow || ev->error_code == BadDrawable ||
         ev->error_code == BadMatch || ev->error_code == BadAccess) {
@@ -69,7 +69,6 @@ int main(int argc, char **argv) {
     xdi_config_t cfg;
     xdi_config_defaults(&cfg);
 
-    /* First pass: locate custom config path or --help / --version */
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)) {
             print_usage(argv[0]);
@@ -83,6 +82,10 @@ int main(int argc, char **argv) {
             snprintf(config_path, sizeof(config_path), "%s", argv[++i]);
         }
     }
+
+    /* Replace any already-running instance cleanly before touching X11/D-Bus */
+    xdi_instance_t instance;
+    xdi_instance_acquire(&instance, NULL);
 
     if (!xdi_config_load(&cfg, config_path)) {
         xdi_config_save(&cfg, config_path);
@@ -116,6 +119,7 @@ int main(int argc, char **argv) {
     Display *dpy = XOpenDisplay(NULL);
     if (!dpy) {
         fprintf(stderr, "xdynamicisland: failed to open X11 display (check $DISPLAY)\n");
+        xdi_instance_release(&instance);
         return 1;
     }
     XSetErrorHandler(x11_error_handler);
@@ -123,8 +127,15 @@ int main(int argc, char **argv) {
     xdi_media_t media;
     xdi_media_init(&media);
 
+    xdi_mpv_t mpv;
+    xdi_mpv_init(&mpv, dpy, RootWindow(dpy, DefaultScreen(dpy)));
+    xdi_media_attach_mpv(&media, &mpv);
+
     xdi_notif_store_t notifs;
     xdi_notif_init(&notifs, cfg.max_history, cfg.persist_notifications);
+    if (media.conn) {
+        xdi_notif_attach_kdeconnect(&notifs, media.conn);
+    }
 
     xdi_audio_viz_t viz;
     xdi_audio_viz_init(&viz, cfg.real_audio_viz);
@@ -143,8 +154,10 @@ int main(int argc, char **argv) {
         xdi_art_destroy(&art);
         xdi_audio_viz_destroy(&viz);
         xdi_notif_destroy(&notifs);
+        xdi_mpv_destroy(&mpv);
         xdi_media_destroy(&media);
         XCloseDisplay(dpy);
+        xdi_instance_release(&instance);
         return 1;
     }
 
@@ -159,7 +172,6 @@ int main(int argc, char **argv) {
     while (g_running) {
         int64_t now_ms = monotonic_ms();
 
-        /* Drain all queued X11 events */
         while (XPending(dpy) > 0) {
             XEvent ev;
             XNextEvent(dpy, &ev);
@@ -177,18 +189,16 @@ int main(int argc, char **argv) {
             xdi_settings_open(&settings);
         }
 
-        /* Drain D-Bus MPRIS2 + notification-daemon messages */
         xdi_media_poll(&media, now_ms);
         xdi_notif_poll(&notifs);
 
-        /* Step animations and render */
         int wait_ms = xdi_ui_tick(&ui, now_ms, settings.open ? settings.win : None);
         if (settings.open) {
             xdi_settings_render(&settings);
         }
 
-        /* Event-driven poll across X11 + MPRIS D-Bus + notification-daemon D-Bus */
-        struct pollfd pfds[3];
+        /* Event-driven poll across X11 + MPRIS/KDEConnect D-Bus + Notification Monitor + mpv IPC */
+        struct pollfd pfds[4];
         int nfds = 0;
         pfds[nfds++] = (struct pollfd){.fd = x11_fd, .events = POLLIN};
 
@@ -197,6 +207,9 @@ int main(int argc, char **argv) {
 
         int nfd = xdi_notif_get_fd(&notifs);
         if (nfd >= 0) pfds[nfds++] = (struct pollfd){.fd = nfd, .events = POLLIN};
+
+        int mpvfd = xdi_mpv_get_fd(&mpv);
+        if (mpvfd >= 0) pfds[nfds++] = (struct pollfd){.fd = mpvfd, .events = POLLIN};
 
         if (XPending(dpy) == 0) {
             poll(pfds, (nfds_t)nfds, wait_ms);
@@ -208,7 +221,9 @@ int main(int argc, char **argv) {
     xdi_art_destroy(&art);
     xdi_audio_viz_destroy(&viz);
     xdi_notif_destroy(&notifs);
+    xdi_mpv_destroy(&mpv);
     xdi_media_destroy(&media);
     XCloseDisplay(dpy);
+    xdi_instance_release(&instance);
     return 0;
 }
